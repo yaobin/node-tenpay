@@ -1,10 +1,13 @@
 # 微信支付 for nodejs
 [![travis][travis]][travis-u] [![npm][npm]][npm-u] [![node][node]][node-u] [![issues][issues]][issues-u] [![commit][commit]][commit-u]
 
-- `中间件` - 支付结果通知, 退款结果通知
+- `通知类中间件` - 支付结果通知, 退款结果通知
 - `获取前端支付参数` - 支持JSSDK, WeixinJSBridge, 小程序, APP
-- `微信支付` `扫码支付` `微信红包` `企业付款`
-- `微信对帐单下载` - 支持数据格式化
+- `多种支付模式` - 支持公众号支付, 刷卡支付, 扫码支付, 微信红包, 企业付款
+- `营销相关功能` - 微信代金券
+- `帐单下载与格式化` - 支持微信对帐单, 微信资金帐单
+- `支持服务商模式` - 所有api均可自行传入sub_appid, sub_mch_id
+- `微信支付仿真测试系统` - 支持沙盒模式, 用于完成支付验收流程
 
 ## 使用前必读
 #### 版本要求
@@ -30,7 +33,7 @@ nodejs >= 8.3.0
 #### 关于返回值
 > 未出错时正常返回为JSON格式数据
 
-- **特殊情况:** `downloadBill` 下载对帐单, 返回值为字符串文本
+- **特殊情况:** `downloadBill`和`downloadFundflow`下载的帐单返回值为字符串文本
 
 ## 安装
 ```Bash
@@ -51,10 +54,13 @@ const config = {
   notify_url: '支付回调网址',
   spbill_create_ip: 'IP地址'
 };
+// 方式一
 const api = new tenpay(config);
+//方式二
+const api = tenpay.init(config);
 
-// init调用: 用于多帐号省略new关键字, tenpay.init(config)返回一个新的实例对象
-await tenpay.init(config).some_api();
+// 沙盒模式(用于微信支付验收)
+const sandboxAPI = await tenpay.sandbox(config);
 ```
 
 #### config说明:
@@ -67,6 +73,9 @@ await tenpay.init(config).some_api();
 - `notify_url` - 支付结果通知回调地址(选填)
   - 可以在初始化的时候传入设为默认值, 不传则需在调用相关API时传入
   - 调用相关API时传入新值则使用新值
+- `refund_url` - 退款结果通知回调地址(选填)
+  - 可以在初始化的时候传入设为默认值, 不传则使用微信商户后台配置
+  - 调用相关API时传入新值则使用新值
 - `spbill_create_ip` - IP地址(选填)
   - 可以在初始化的时候传入设为默认值, 不传则默认值为`127.0.0.1`
   - 调用相关API时传入新值则使用新值
@@ -76,9 +85,10 @@ await tenpay.init(config).some_api();
 - 如回调地址不需要按业务变化, 建议在初始化时传入统一的回调地址
 - 如IP地址不需要按业务变化, 建议在初始化时传入统一的IP地址
 
-## 中间件・微信通知(支付结果/退款结果)
-- middleware参数: `pay<支付结果通知, 默认>` `refund<退款结果通知>`
+## 中间件・微信消息通知
+- middleware参数: `pay<支付结果通知, 默认>` `refund<退款结果通知>` `nativePay<扫码支付模式一回调>`
 - 需自行添加bodyParser接收post data
+- 中间件会对通知消息进行合法性验证, 并将消息解析为json格式放入req.weixin(Express)或ctx.request.weixin(Koa)
 - reply()会自动封装SUCCESS消息, reply('some error_msg')会自动封装FAIL消息
 
 #### Express中使用
@@ -90,10 +100,8 @@ router.post('/xxx', api.middlewareForExpress('pay'), (req, res) => {
 
   // 业务逻辑...
 
-  // 回复成功消息
-  res.reply();
-  // 回复错误消息
-  // res.reply('错误信息');
+  // 回复消息(参数为空回复成功, 传值则为错误消息)
+  res.reply('错误消息' || '');
 });
 ```
 
@@ -111,10 +119,8 @@ router.post('/xxx', api.middleware('refund'), async ctx => {
 
   // 业务逻辑...
 
-  // 回复成功消息
-  ctx.reply();
-  // 回复错误消息
-  // ctx.reply('错误信息');
+  // 回复消息(参数为空回复成功, 传值则为错误消息)
+  ctx.reply('错误消息' || '');
 });
 ```
 
@@ -129,7 +135,7 @@ router.post('/xxx', api.middleware('refund'), async ctx => {
 let result = await api.getPayParams({
   out_trade_no: '商户内部订单号',
   body: '商品简单描述',
-  total_fee: 100,
+  total_fee: '订单金额(分)',
   openid: '付款用户的openid'
 });
 ```
@@ -149,7 +155,7 @@ let result = await api.getPayParamsByPrepay({
 let result = await api.getAppParams({
   out_trade_no: '商户内部订单号',
   body: '商品简单描述',
-  total_fee: 100
+  total_fee: '订单金额(分)'
 });
 ```
 ##### 相关默认值:
@@ -163,13 +169,33 @@ let result = await api.getAppParamsByPrepay({
 });
 ```
 
-### micropay: 扫码支付
+### getNativeUrl: 扫码支付(模式一)
+```javascript
+let result = await api.getNativeUrl({
+  product_id: '商品ID'
+});
+```
+
+### 扫码支付(模式二)
+```javascript
+// 使用统一下单API可直接获取code_url, 需自行生成二维码图片
+let {prepay_id, code_url} = await api.unifiedOrder({
+  out_trade_no: '商户内部订单号',
+  body: '商品简单描述',
+  total_fee: '订单金额(分)',
+  openid: '用户openid',
+  trade_type: 'NATIVE',
+  product_id: '商品id'
+});
+```
+
+### micropay: 刷卡支付
 ```javascript
 let result = await api.micropay({
   out_trade_no: '商户内部订单号',
   body: '商品简单描述',
-  total_fee: 100,
-  auth_code: '1234567890123'
+  total_fee: '订单金额(分)',
+  auth_code: '授权码'
 });
 ```
 
@@ -178,7 +204,7 @@ let result = await api.micropay({
 let result = await api.unifiedOrder({
   out_trade_no: '商户内部订单号',
   body: '商品简单描述',
-  total_fee: 100,
+  total_fee: '订单金额(分)',
   openid: '用户openid'
 });
 ```
@@ -219,12 +245,13 @@ let result = await api.refund({
   // transaction_id: '微信的订单号',
   out_trade_no: '商户内部订单号',
   out_refund_no: '商户内部退款单号',
-  total_fee: 100,
-  refund_fee: 100
+  total_fee: '订单金额(分)',
+  refund_fee: '退款金额(分)'
 });
 ```
 ##### 相关默认值:
 - `op_user_id` - 默认为商户号(此字段在小程序支付文档中出现)
+- `notify_url` - 默认为初始化时传入的refund_url, 无此参数则使用商户后台配置的退款通知地址
 
 ### refundQuery: 查询退款
 ```javascript
@@ -247,12 +274,54 @@ let result = await api.refundQuery({
  * json.list_data: 详细数据的二维数据 - [["2017-12-26 19:20:39","wx12345", "12345", ...], ...]
  */
 let result = await api.downloadBill({
-  bill_date: '账单的日期'
+  bill_date: '账单日期'
 }, true);
 ```
 ##### 相关默认值:
 - `bill_type` - ALL
 - `format` - false
+
+### downloadFundflow: 下载资金帐单
+```javascript
+/**
+ * 新增一个format参数(默认: false), 用于自动转化帐单为json格式
+ * json.total_title: 统计数据的标题数组 - ["资金流水总笔数","收入笔数","收入金额", ...],
+ * json.total_data: 统计数据的数组 - ["20.0", "17.0", "0.35", ...],
+ * json.list_title: 详细数据的标题数组 - ["记账时间","微信支付业务单号","资金流水单号", ...],
+ * json.list_data: 详细数据的二维数据 - [["2018-02-01 04:21:23","12345", "12345", ...], ...]
+ */
+let result = await api.downloadFundflow({
+  bill_date: '账单日期'
+}, true);
+```
+##### 相关默认值:
+- `account_type` - Basic
+- `format` - false
+
+### sendCoupon: 发放代金券
+```javascript
+let result = await api.sendCoupon({
+  coupon_stock_id: '代金券批次id',
+  partner_trade_no: '商户单据号',
+  openid: '用户openid'
+});
+```
+
+### queryCouponStock: 查询代金券批次
+```javascript
+let result = await api.queryCouponStock({
+  coupon_stock_id: '代金券批次id'
+});
+```
+
+### queryCouponInfo: 查询代金券信息
+```javascript
+let result = await api.queryCouponInfo({
+  coupon_id: '代金券id',
+  openid: '用户openid',
+  stock_id: '批次号'
+});
+```
 
 ### transfers: 企业付款
 ```javascript
@@ -260,12 +329,12 @@ let result = await api.transfers({
   partner_trade_no: '商户内部付款订单号',
   openid: '用户openid',
   re_user_name: '用户真实姓名',
-  amount: 100,
+  amount: '付款金额(分)',
   desc: '企业付款描述信息'
 });
 ```
 ##### 相关默认值:
-- `check_name` - OPTION_CHECK
+- `check_name` - FORCE_CHECK
 - `spbill_create_ip` - 默认为初始化时传入的值或`127.0.0.1`
 
 ### transfersQuery: 查询企业付款
@@ -280,10 +349,10 @@ let result = await api.transfersQuery({
 let result = await api.sendRedpack({
   // mch_billno, mch_autono 二选一
   // mch_billno: '商户内部付款订单号',
-  mch_autono: '10位当日唯一数字',
+  mch_autono: '10位当日唯一数字, 用于自动生成mch_billno',
   send_name: '商户名称',
   re_openid: '用户openid',
-  total_amount: <付款金额(分)>,
+  total_amount: '红包金额(分)',
   wishing: '红包祝福语',
   act_name: '活动名称',
   remark: '备注信息'
@@ -294,17 +363,17 @@ let result = await api.sendRedpack({
 - `mch_autono` - 当日10位唯一数字, 用于自动处理商户内部订单号逻辑
 - `total_num` - 1
 - `client_ip` - 默认为初始化时的spbill_create_ip参数值或`127.0.0.1`
-- `scene_id` - 空, 当红包金额大于`200元`时必传
+- `scene_id` - 空, 当红包金额大于`2元`时必传(微信文档说明为200元, 实测为2元)
 
 ### sendGroupRedpack: 发放裂变红包
 ```javascript
 let result = await api.sendGroupRedpack({
   // mch_billno, mch_autono 二选一
   // mch_billno: '商户内部付款订单号',
-  mch_autono: '10位当日唯一数字',
+  mch_autono: '10位当日唯一数字, 用于自动生成mch_billno',
   send_name: '商户名称',
   re_openid: '种子用户openid',
-  total_amount: <付款金额(分)>,
+  total_amount: '红包金额(分)',
   wishing: '红包祝福语',
   act_name: '活动名称',
   remark: '备注信息'
@@ -315,7 +384,7 @@ let result = await api.sendGroupRedpack({
 - `mch_autono` - 当日10位唯一数字, 用于自动处理商户内部订单号逻辑
 - `total_num` - 3, 分裂红包要求值为3~20之间
 - `amt_type` - ALL_RAND
-- `scene_id` - 空, 当红包金额大于`200元`时必传(文档中未说明)
+- `scene_id` - 空, 当红包金额大于`2元`时必传(文档中未说明)
 
 ### redpackQuery: 查询红包记录
 ```javascript

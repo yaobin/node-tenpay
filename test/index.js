@@ -5,7 +5,7 @@ const config = process.env.TESTER == 'travis' ? {
   partnerKey: process.env.partnerKey || '0',
   openid: process.env.openid || '0'
 } : require('../config');
-const api = new tenpay(config);
+const api = new tenpay(config, true);
 
 const assert = require('assert');
 describe('订单相关', () => {
@@ -59,6 +59,13 @@ describe('订单相关', () => {
     assert.deepEqual(Object.keys(res), keys);
   });
 
+  it.skip('生成扫码支付(模式一)URL: getNativeUrl', async () => {
+    let url = api.getNativeUrl({
+      product_id: '88888'
+    });
+    assert.ok(url);
+  });
+
   it.skip('订单查询: orderQuery', async () => {
     let res = await api.orderQuery({
       out_trade_no: id
@@ -106,13 +113,14 @@ describe('退款相关', () => {
 });
 
 describe('企业付款相关', () => {
-  let id = 'T1514732081550';
+  let id = 'T1514732081554';
 
   it.skip('申请付款: transfers', async () => {
     let res = await api.transfers({
       partner_trade_no: id,
       openid: config.openid,
-      amount: 100,
+      re_user_name: config.user_name,
+      amount: 30,
       desc: '企业付款测试'
     });
     assert.ok(res.return_code === 'SUCCESS');
@@ -167,4 +175,40 @@ describe('红包相关', () => {
     assert.ok(res.return_code === 'SUCCESS');
     assert.ok(res.result_code === 'SUCCESS');
   });
+});
+
+describe('帐单相关', () => {
+  it.skip('下载对账单: downloadBill', async () => {
+    try {
+      let res = await api.downloadBill({
+        bill_date: '20171125'
+      }, true);
+      assert.ok(typeof res === 'object');
+    } catch (err) {
+      assert.ok(err.message === 'No Bill Exist')
+    }
+  });
+
+  it.skip('下载资金账单: downloadFundflow', async () => {
+    try {
+      let res = await api.downloadFundflow({
+        bill_date: '20180101'
+      }, true);
+      assert.ok(typeof res === 'object');
+    } catch (err) {
+      assert.ok(err.message === 'NO_BILL_EXIST')
+    }
+  });
+});
+
+describe('沙盒测试', () => {
+  it.skip('获取沙盒密钥: getSignkey', async () => {
+    let {sandbox_signkey} = await api.getSignkey();
+    assert.ok(sandbox_signkey);
+  });
+
+  it.skip('创建沙盒实例', async() => {
+    let sandbox = await tenpay.sandbox(config);
+    assert.ok(sandbox);
+  })
 });
